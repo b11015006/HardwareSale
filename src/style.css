@@ -210,6 +210,7 @@ header .sub a {
   font-size: 15px;
   line-height: 150%;
   white-space: pre-line;
+  color: var(--text);
 }
 
 .result-snippet mark {
