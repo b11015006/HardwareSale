@@ -1,13 +1,9 @@
-name: Scrape PTT HardwareSale
+name: Scrape Catch-up History
 
 on:
   schedule:
-    - cron: "0 */3 * * *"
+    - cron: "30 * * * *" # hourly, offset from Scrape New Articles to avoid push races
   workflow_dispatch:
-    inputs:
-      count:
-        description: Number of latest articles to scrape
-        default: "10"
 
 permissions:
   contents: write
@@ -22,12 +18,14 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
-      - run: node scripts/scrape.mjs "${{ inputs.count || '10' }}"
-      - name: Commit updated article data
+      - run: npm run scrape:catchup
+      - name: Commit and push updated article data
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add public/data/articles.json
+          git add public/data data/state
           git diff --cached --quiet && echo "No changes to commit" && exit 0
-          git commit -m "Update scraped articles"
+          git commit -m "Scrape: catch-up history"
+          git fetch origin main
+          git rebase origin/main
           git push

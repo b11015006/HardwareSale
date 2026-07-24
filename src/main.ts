@@ -1,9 +1,10 @@
 import './style.css'
-import type { Article, ArticlesPayload } from './types.ts'
+import type { Article, Manifest } from './types.ts'
 import { escapeHtml, searchArticles } from './search.ts'
 
 const BOARD_URL = 'https://www.ptt.cc/bbs/HardwareSale/index.html'
-const DATA_URL = `${import.meta.env.BASE_URL}data/articles.json`
+const MANIFEST_URL = `${import.meta.env.BASE_URL}data/manifest.json`
+const articleFileUrl = (date: string) => `${import.meta.env.BASE_URL}data/articles/${date}.jsonl`
 
 const app = document.querySelector<HTMLDivElement>('#app')!
 app.innerHTML = `
@@ -57,22 +58,47 @@ function renderResults(articles: Article[], query: string) {
     .join('')
 }
 
+function parseJsonl(text: string): Article[] {
+  return text
+    .split('\n')
+    .filter((line) => line.trim() !== '')
+    .map((line) => JSON.parse(line) as Article)
+}
+
+// PTT article ids look like "M.<unix-epoch>.A.<hash>"; use the embedded
+// timestamp to sort across date files without re-parsing postedAt strings.
+function articleEpoch(article: Article): number {
+  return Number(article.id.split('.')[1] ?? 0)
+}
+
+async function loadArticles(): Promise<Article[]> {
+  const manifestRes = await fetch(MANIFEST_URL)
+  if (!manifestRes.ok) throw new Error(`HTTP ${manifestRes.status} loading manifest`)
+  const manifest: Manifest = await manifestRes.json()
+
+  const perDate = await Promise.all(
+    manifest.dates.map(async (date) => {
+      const res = await fetch(articleFileUrl(date))
+      if (!res.ok) return []
+      return parseJsonl(await res.text())
+    }),
+  )
+
+  return perDate.flat().sort((a, b) => articleEpoch(b) - articleEpoch(a))
+}
+
 async function main() {
   statusEl.textContent = '載入文章資料中…'
-  let payload: ArticlesPayload
+  let articles: Article[]
   try {
-    const res = await fetch(DATA_URL)
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    payload = await res.json()
+    articles = await loadArticles()
   } catch (err) {
     statusEl.textContent = '文章資料載入失敗，請稍後再試。'
     console.error(err)
     return
   }
 
-  const articles = [...payload.articles].reverse() // newest first
   renderResults(articles, '')
-
   input.addEventListener('input', () => renderResults(articles, input.value))
 }
 

@@ -1,41 +1,103 @@
-// Scrapes the PTT HardwareSale board and writes full article content
-// (not just titles) to public/data/articles.json for client-side search.
+// Scrapes the PTT HardwareSale board and stores full article content
+// (not just titles) as JSONL, one file per post date, under
+// public/data/articles/YYYY-MM-DD.jsonl, for client-side search.
+//
+// Two modes (first CLI arg):
+//   new     - incremental: walk backward from the newest page until an
+//             already-stored article id is found. Meant to run hourly.
+//   catchup - backfill: resume from a saved cursor and walk further
+//             backward in time until articles older than CUTOFF_DATE are
+//             reached. Also meant to run hourly, picking up where the
+//             previous run left off.
+//
+// Article-content fetches are throttled to 1/min; see ARTICLE_DELAY_MS.
 import * as cheerio from "cheerio";
-import { writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, writeFile, appendFile } from "node:fs/promises";
 
 const BOARD_URL = "https://www.ptt.cc/bbs/HardwareSale/index.html";
-const OUT_FILE = new URL("../public/data/articles.json", import.meta.url);
-const TARGET_COUNT = Number(process.argv[2] ?? 10);
+const ARTICLES_DIR = new URL("../public/data/articles/", import.meta.url);
+const MANIFEST_FILE = new URL("../public/data/manifest.json", import.meta.url);
+const STATE_FILE = new URL("../data/state/catchup.json", import.meta.url);
+
+// Catch-up traces backward through history down to and including this date.
+const CUTOFF_DATE = "2026-07-01";
+
 const HEADERS = {
   "User-Agent":
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
   "Accept-Language": "zh-TW,zh;q=0.9,en;q=0.8",
   Cookie: "over18=1",
 };
-const DELAY_MS = 300;
+// Be polite to PTT: board index (listing) pages are cheap, so those stay at
+// 1/sec, but individual article-content fetches are throttled to 1/min.
+const INDEX_DELAY_MS = 1000;
+const ARTICLE_DELAY_MS = 60_000;
 const MAX_RETRIES = 4;
+// Kept small because each page can add up to ~20 articles to the queue,
+// and at 1 article/min that queue is the run's time budget — this keeps a
+// single hourly run comfortably under an hour even in the worst case.
+const MAX_PAGES_PER_ROUTINE_RUN = 2;
+const MAX_PAGES_PER_CATCHUP_RUN = 2;
+
+const MONTHS = {
+  Jan: "01", Feb: "02", Mar: "03", Apr: "04", May: "05", Jun: "06",
+  Jul: "07", Aug: "08", Sep: "09", Oct: "10", Nov: "11", Dec: "12",
+};
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-async function fetchHtml(url) {
+async function fetchHtml(url, delayMs) {
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
       const res = await fetch(url, { headers: HEADERS });
       if (!res.ok) throw new Error(`${res.status} fetching ${url}`);
-      return await res.text();
+      const html = await res.text();
+      await sleep(delayMs);
+      return html;
     } catch (err) {
       if (attempt === MAX_RETRIES) throw err;
       const backoff = 500 * 2 ** (attempt - 1);
-      console.warn(`fetch failed (attempt ${attempt}/${MAX_RETRIES}) for ${url}: ${err.message}, retrying in ${backoff}ms`);
+      console.warn(
+        `fetch failed (attempt ${attempt}/${MAX_RETRIES}) for ${url}: ${err.message}, retrying in ${backoff}ms`,
+      );
       await sleep(backoff);
     }
   }
 }
 
+function idFromUrl(url) {
+  return url.split("/").pop().replace(/\.html$/, "");
+}
+
+// PTT article time format: "Fri Jul 24 17:48:33 2026". This is already the
+// board's local (Taiwan) date, so extract it directly by regex rather than
+// via Date parsing, which would apply the scraping machine's timezone.
+function dateKeyFromPttTime(pttTime) {
+  const m = pttTime.match(/^\w+\s+(\w{3})\s+(\d{1,2})\s+[\d:]+\s+(\d{4})$/);
+  if (!m) return null;
+  const [, mon, day, year] = m;
+  const month = MONTHS[mon];
+  if (!month) return null;
+  return `${year}-${month}-${day.padStart(2, "0")}`;
+}
+
+// Fallback for articles that lost their metaline block (some users
+// accidentally delete it while editing). PTT article ids embed a UTC unix
+// timestamp; convert to Taiwan (UTC+8) local date for bucketing.
+function dateKeyFromId(id) {
+  const epoch = Number(id.split(".")[1]);
+  if (!epoch) return null;
+  const d = new Date((epoch + 8 * 3600) * 1000);
+  const y = d.getUTCFullYear();
+  const mo = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(d.getUTCDate()).padStart(2, "0");
+  return `${y}-${mo}-${day}`;
+}
+
 // A board index page lists articles oldest-to-newest top-to-bottom.
 // Returns valid (non-pinned, non-deleted) entries in that same order,
 // plus the link to the previous (older) page for pagination.
-function parseIndex(html) {
+function parseIndex(html, pageUrl) {
   const $ = cheerio.load(html);
   const entries = [];
   $(".r-ent").each((_, el) => {
@@ -44,26 +106,12 @@ function parseIndex(html) {
     const href = a.attr("href");
     if (!href || !title) return; // deleted article, no link/title
     if (title.startsWith("[公告]")) return; // pinned board announcement
-    entries.push({ title, url: new URL(href, BOARD_URL).href });
+    entries.push({ title, url: new URL(href, pageUrl).href });
   });
   const prevHref = $(".btn-group-paging .btn.wide")
-    .filter((_, el) => $(el).text().trim() === "上頁")
+    .filter((_, el) => $(el).text().includes("上頁") && !$(el).hasClass("disabled"))
     .attr("href");
-  return { entries, prevUrl: prevHref ? new URL(prevHref, BOARD_URL).href : null };
-}
-
-async function collectLatestArticles(targetCount) {
-  let pageUrl = BOARD_URL;
-  let collected = [];
-  while (pageUrl && collected.length < targetCount) {
-    const html = await fetchHtml(pageUrl);
-    const { entries, prevUrl } = parseIndex(html);
-    // entries are oldest->newest; older pages get prepended.
-    collected = [...entries, ...collected];
-    pageUrl = collected.length < targetCount ? prevUrl : null;
-    if (pageUrl) await sleep(DELAY_MS);
-  }
-  return collected.slice(-targetCount);
+  return { entries, prevUrl: prevHref ? new URL(prevHref, pageUrl).href : null };
 }
 
 function parseArticle(html, url) {
@@ -85,36 +133,193 @@ function parseArticle(html, url) {
     .replace(/\n--\s*$/, "")
     .trim();
 
-  const id = url.split("/").pop().replace(/\.html$/, "");
+  const postedAt = meta["時間"] ?? "";
+  const id = idFromUrl(url);
   return {
     id,
     title: meta["標題"] ?? "",
     author: meta["作者"] ?? "",
-    postedAt: meta["時間"] ?? "",
+    postedAt,
+    dateKey: dateKeyFromPttTime(postedAt) ?? dateKeyFromId(id) ?? "unknown",
     url,
     content,
   };
 }
 
-async function main() {
-  console.log(`Collecting latest ${TARGET_COUNT} non-pinned articles...`);
-  const stubs = await collectLatestArticles(TARGET_COUNT);
-  console.log(`Found ${stubs.length} article links, fetching bodies...`);
+async function loadExistingIds() {
+  await mkdir(ARTICLES_DIR, { recursive: true });
+  const ids = new Set();
+  const files = await readdir(ARTICLES_DIR).catch(() => []);
+  for (const file of files) {
+    if (!file.endsWith(".jsonl")) continue;
+    const text = await readFile(new URL(file, ARTICLES_DIR), "utf8");
+    for (const line of text.split("\n")) {
+      if (!line.trim()) continue;
+      try {
+        ids.add(JSON.parse(line).id);
+      } catch {
+        // skip malformed line
+      }
+    }
+  }
+  return ids;
+}
 
+async function appendArticles(articles) {
+  const byDate = new Map();
+  for (const article of articles) {
+    if (!byDate.has(article.dateKey)) byDate.set(article.dateKey, []);
+    byDate.get(article.dateKey).push(article);
+  }
+  for (const [date, list] of byDate) {
+    const file = new URL(`${date}.jsonl`, ARTICLES_DIR);
+    const lines = list.map((a) => JSON.stringify(a)).join("\n") + "\n";
+    await appendFile(file, lines, "utf8");
+  }
+}
+
+async function writeManifest() {
+  const files = (await readdir(ARTICLES_DIR).catch(() => []))
+    .filter((f) => f.endsWith(".jsonl"))
+    .map((f) => f.replace(/\.jsonl$/, ""))
+    .sort();
+  await writeFile(
+    MANIFEST_FILE,
+    JSON.stringify({ dates: files, updatedAt: new Date().toISOString() }, null, 2),
+  );
+}
+
+async function loadCatchupState() {
+  try {
+    const text = await readFile(STATE_FILE, "utf8");
+    return JSON.parse(text);
+  } catch {
+    return { nextPageUrl: null, done: false };
+  }
+}
+
+async function saveCatchupState(state) {
+  await mkdir(new URL(".", STATE_FILE), { recursive: true });
+  await writeFile(
+    STATE_FILE,
+    JSON.stringify({ ...state, updatedAt: new Date().toISOString() }, null, 2),
+  );
+}
+
+async function fetchArticles(entries) {
   const articles = [];
-  for (const { url } of stubs) {
-    const html = await fetchHtml(url);
-    articles.push(parseArticle(html, url));
-    await sleep(DELAY_MS);
+  for (const entry of entries) {
+    const html = await fetchHtml(entry.url, ARTICLE_DELAY_MS);
+    articles.push(parseArticle(html, entry.url));
+  }
+  return articles;
+}
+
+// Routine job: find articles newer than anything already stored. Walks
+// backward from the newest page only as far as needed to reach an
+// already-known article, so it naturally catches up on any backlog if a
+// run was missed.
+async function scrapeNew() {
+  console.log("Routine scrape: looking for new articles...");
+  const existingIds = await loadExistingIds();
+
+  let pageUrl = BOARD_URL;
+  let pagesFetched = 0;
+  const collected = [];
+
+  while (pageUrl && pagesFetched < MAX_PAGES_PER_ROUTINE_RUN) {
+    const html = await fetchHtml(pageUrl, INDEX_DELAY_MS);
+    pagesFetched++;
+    const { entries, prevUrl } = parseIndex(html, pageUrl);
+
+    let hitKnown = false;
+    for (const entry of [...entries].reverse()) {
+      if (existingIds.has(idFromUrl(entry.url))) {
+        hitKnown = true;
+        break;
+      }
+      collected.push(entry);
+    }
+    if (hitKnown || !prevUrl) break;
+    pageUrl = prevUrl;
   }
 
-  const payload = {
-    scrapedAt: new Date().toISOString(),
-    count: articles.length,
-    articles,
-  };
-  await writeFile(OUT_FILE, JSON.stringify(payload, null, 2));
-  console.log(`Wrote ${articles.length} articles to ${OUT_FILE.pathname}`);
+  console.log(`Found ${collected.length} new article link(s) across ${pagesFetched} page(s).`);
+  const articles = await fetchArticles(collected);
+  const fresh = articles.filter((a) => !existingIds.has(a.id));
+  await appendArticles(fresh);
+  await writeManifest();
+  console.log(`Stored ${fresh.length} new article(s).`);
+}
+
+// Catch-up job: resume from a saved cursor and keep paging backward in
+// time, storing anything not already saved, until articles older than
+// CUTOFF_DATE are reached (or the board's oldest page is reached first).
+async function scrapeCatchup() {
+  const state = await loadCatchupState();
+  if (state.done) {
+    console.log(`Catch-up already complete (reached ${CUTOFF_DATE}).`);
+    return;
+  }
+
+  let pageUrl = state.nextPageUrl;
+  if (!pageUrl) {
+    // First run: start just older than the newest page, since the routine
+    // job keeps the newest page itself up to date.
+    const html = await fetchHtml(BOARD_URL, INDEX_DELAY_MS);
+    pageUrl = parseIndex(html, BOARD_URL).prevUrl;
+  }
+
+  const existingIds = await loadExistingIds();
+  let pagesFetched = 0;
+  let reachedCutoff = !pageUrl; // no older pages exist at all
+  const collected = [];
+
+  while (pageUrl && pagesFetched < MAX_PAGES_PER_CATCHUP_RUN) {
+    const html = await fetchHtml(pageUrl, INDEX_DELAY_MS);
+    pagesFetched++;
+    const { entries, prevUrl } = parseIndex(html, pageUrl);
+    for (const entry of entries) {
+      if (!existingIds.has(idFromUrl(entry.url))) collected.push(entry);
+    }
+    if (!prevUrl) {
+      reachedCutoff = true;
+      pageUrl = null;
+      break;
+    }
+    pageUrl = prevUrl;
+  }
+
+  console.log(`Catch-up: fetched ${pagesFetched} page(s), ${collected.length} candidate article(s).`);
+
+  const articles = await fetchArticles(collected);
+  const inRange = articles.filter((a) => a.dateKey >= CUTOFF_DATE);
+  if (articles.some((a) => a.dateKey !== "unknown" && a.dateKey < CUTOFF_DATE)) {
+    reachedCutoff = true;
+  }
+
+  const fresh = inRange.filter((a) => !existingIds.has(a.id));
+  await appendArticles(fresh);
+  await writeManifest();
+  await saveCatchupState({ nextPageUrl: reachedCutoff ? null : pageUrl, done: reachedCutoff });
+
+  console.log(
+    `Stored ${fresh.length} article(s). ${
+      reachedCutoff
+        ? `Reached cutoff ${CUTOFF_DATE}, catch-up complete.`
+        : `Will resume from ${pageUrl} next run.`
+    }`,
+  );
+}
+
+async function main() {
+  const mode = process.argv[2] ?? "new";
+  if (mode === "new") await scrapeNew();
+  else if (mode === "catchup") await scrapeCatchup();
+  else {
+    console.error(`Unknown mode "${mode}". Use "new" or "catchup".`);
+    process.exit(1);
+  }
 }
 
 main().catch((err) => {

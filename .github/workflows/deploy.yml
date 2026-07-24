@@ -5,7 +5,7 @@ on:
     branches: [main]
   workflow_dispatch:
   workflow_run:
-    workflows: [Scrape PTT HardwareSale]
+    workflows: [Scrape New Articles, Scrape Catch-up History]
     types: [completed]
 
 permissions:
