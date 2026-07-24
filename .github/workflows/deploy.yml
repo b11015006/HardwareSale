@@ -24,7 +24,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          # No explicit ref: workflow_run.head_sha is the commit the
+          # triggering scrape workflow *started* from, not the new commit
+          # it pushed after finishing 30-40+ minutes later. Default
+          # checkout resolves to main's current tip at trigger time, which
+          # by then already includes that push.
           lfs: true
       - uses: actions/setup-node@v4
         with:

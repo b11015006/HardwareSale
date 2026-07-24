@@ -34,6 +34,8 @@ All `*.jsonl` files are tracked via Git LFS (`.gitattributes`), declared as UTF-
 
 Both scrape workflows `git fetch` + `git rebase origin/main` before pushing, to tolerate the (rare, given the 30-min offset) case where the other scrape workflow pushed in between.
 
+**Don't pin `deploy.yml`'s checkout to `github.event.workflow_run.head_sha`.** This was tried and shipped, then caught when a 40-minute catchup run's newly-scraped data didn't appear on the live site after a successful deploy. `head_sha` is the commit the *triggering* workflow started from, not whatever it pushes after its own job finishes — for these scrape workflows, that's a completely different (older) commit than the one containing the data the run just produced. The fix is to not set `ref:` at all and let `actions/checkout` default to main's tip at the deploy workflow's own trigger time, which by then correctly includes the scrape workflow's push.
+
 ## Testing changes
 
 - `npm run build` (runs `tsc` first) is the fastest correctness check for frontend changes.
