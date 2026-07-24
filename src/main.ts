@@ -41,16 +41,16 @@ function renderResults(articles: Article[], query: string) {
     .map(({ article, snippet, matchedIn }) => {
       const matchLabel = matchedIn === 'title' ? '標題相符' : '內文相符'
       return `
-        <li class="result-card">
-          <a class="result-title" href="${article.url}" target="_blank" rel="noreferrer">
-            ${escapeHtml(article.title)}
+        <li>
+          <a class="result-card" href="${article.url}" target="_blank" rel="noreferrer">
+            <span class="result-title">${escapeHtml(article.title)}</span>
+            <div class="result-meta">
+              <span class="badge">${matchLabel}</span>
+              <span>${escapeHtml(article.author)}</span>
+              <span>${escapeHtml(article.postedAt)}</span>
+            </div>
+            <p class="result-snippet">${snippet}</p>
           </a>
-          <div class="result-meta">
-            <span class="badge">${matchLabel}</span>
-            <span>${escapeHtml(article.author)}</span>
-            <span>${escapeHtml(article.postedAt)}</span>
-          </div>
-          <p class="result-snippet">${snippet}</p>
         </li>
       `
     })
