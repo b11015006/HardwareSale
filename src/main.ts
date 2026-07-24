@@ -50,6 +50,25 @@ const categoryToggle = document.querySelector<HTMLDivElement>('#categoryToggle')
 const categoryThumb = categoryToggle.querySelector<HTMLDivElement>('.toggle-thumb')!
 const categoryInputs = categoryToggle.querySelectorAll<HTMLInputElement>('input[name="category"]')
 
+// Measures the checked label's actual pixel position/width rather than
+// using a percentage-based transform, which drifts: translateX(N * 100%)
+// moves by N times the thumb's *own* width, not N times a track quarter,
+// so any padding/rounding difference compounds further right.
+function positionThumb(radio: HTMLInputElement) {
+  const label = radio.closest('label')!
+  const containerRect = categoryToggle.getBoundingClientRect()
+  const labelRect = label.getBoundingClientRect()
+  categoryThumb.style.left = `${labelRect.left - containerRect.left}px`
+  categoryThumb.style.width = `${labelRect.width}px`
+}
+
+function checkedCategoryInput(): HTMLInputElement {
+  return Array.from(categoryInputs).find((r) => r.checked) ?? categoryInputs[0]!
+}
+
+positionThumb(checkedCategoryInput())
+window.addEventListener('resize', () => positionThumb(checkedCategoryInput()))
+
 function renderCard(article: Article, snippetHtml: string, badgeLabel: string | null): string {
   return `
     <li>
@@ -139,11 +158,11 @@ async function main() {
 
   rerender()
   input.addEventListener('input', rerender)
-  categoryInputs.forEach((radio, index) => {
+  categoryInputs.forEach((radio) => {
     radio.addEventListener('change', () => {
       if (!radio.checked) return
       category = radio.value as Category
-      categoryThumb.style.transform = `translateX(${index * 100}%)`
+      positionThumb(radio)
       rerender()
     })
   })

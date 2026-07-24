@@ -86,11 +86,11 @@ header .sub a {
 
   .toggle-thumb {
     position: absolute;
-    inset: 4px;
-    width: calc(25% - 4px);
+    top: 4px;
+    bottom: 4px;
     background: var(--accent);
     border-radius: 999px;
-    transition: transform 0.25s ease;
+    transition: left 0.25s ease, width 0.25s ease;
   }
 
   label {
