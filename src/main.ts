@@ -1,6 +1,13 @@
 import './style.css'
 import type { Article, Manifest } from './types.ts'
-import { escapeHtml, searchArticles } from './search.ts'
+import {
+  CATEGORIES,
+  buildPlainSnippet,
+  escapeHtml,
+  filterByCategory,
+  searchArticles,
+  type Category,
+} from './search.ts'
 
 const BOARD_URL = 'https://www.ptt.cc/bbs/HardwareSale/index.html'
 const MANIFEST_URL = `${import.meta.env.BASE_URL}data/manifest.json`
@@ -16,6 +23,18 @@ app.innerHTML = `
   </p>
 </header>
 
+<div class="category-toggle" id="categoryToggle" role="radiogroup" aria-label="文章分類">
+  <div class="toggle-thumb"></div>
+  ${CATEGORIES.map(
+    ({ value, label }, i) => `
+    <label>
+      <input type="radio" name="category" value="${value}" ${i === 0 ? 'checked' : ''} />
+      <span>${label}</span>
+    </label>
+  `,
+  ).join('')}
+</div>
+
 <div class="search-box">
   <input id="query" type="search" placeholder="輸入關鍵字，例如：RTX 4060 面交" autofocus />
 </div>
@@ -27,34 +46,51 @@ app.innerHTML = `
 const input = document.querySelector<HTMLInputElement>('#query')!
 const statusEl = document.querySelector<HTMLParagraphElement>('#status')!
 const resultsEl = document.querySelector<HTMLUListElement>('#results')!
+const categoryToggle = document.querySelector<HTMLDivElement>('#categoryToggle')!
+const categoryThumb = categoryToggle.querySelector<HTMLDivElement>('.toggle-thumb')!
+const categoryInputs = categoryToggle.querySelectorAll<HTMLInputElement>('input[name="category"]')
 
-function renderResults(articles: Article[], query: string) {
+function renderCard(article: Article, snippetHtml: string, badgeLabel: string | null): string {
+  return `
+    <li>
+      <a class="result-card" href="${article.url}" target="_blank" rel="noreferrer">
+        <span class="result-title">${escapeHtml(article.title)}</span>
+        <div class="result-meta">
+          ${badgeLabel ? `<span class="badge">${badgeLabel}</span>` : ''}
+          <span>${escapeHtml(article.author)}</span>
+          <span>${escapeHtml(article.postedAt)}</span>
+        </div>
+        <p class="result-snippet">${snippetHtml}</p>
+      </a>
+    </li>
+  `
+}
+
+function renderResults(articles: Article[], query: string, category: Category) {
+  const inCategory = filterByCategory(articles, category)
+  const categoryLabel = CATEGORIES.find((c) => c.value === category)!.label
+
   if (query.trim() === '') {
-    resultsEl.innerHTML = ''
-    statusEl.textContent = `目前共 ${articles.length} 篇文章，輸入關鍵字開始搜尋。`
+    statusEl.textContent =
+      category === 'all'
+        ? `目前共 ${inCategory.length} 篇文章，輸入關鍵字開始搜尋。`
+        : `分類「${categoryLabel}」共 ${inCategory.length} 篇文章，輸入關鍵字開始搜尋。`
+    resultsEl.innerHTML = inCategory
+      .map((article) => renderCard(article, buildPlainSnippet(article.content), null))
+      .join('')
     return
   }
 
-  const results = searchArticles(articles, query)
-  statusEl.textContent = `找到 ${results.length} 篇符合「${query}」的文章`
+  const results = searchArticles(inCategory, query)
+  statusEl.textContent =
+    category === 'all'
+      ? `找到 ${results.length} 篇符合「${query}」的文章`
+      : `分類「${categoryLabel}」中找到 ${results.length} 篇符合「${query}」的文章`
 
   resultsEl.innerHTML = results
-    .map(({ article, snippet, matchedIn }) => {
-      const matchLabel = matchedIn === 'title' ? '標題相符' : '內文相符'
-      return `
-        <li>
-          <a class="result-card" href="${article.url}" target="_blank" rel="noreferrer">
-            <span class="result-title">${escapeHtml(article.title)}</span>
-            <div class="result-meta">
-              <span class="badge">${matchLabel}</span>
-              <span>${escapeHtml(article.author)}</span>
-              <span>${escapeHtml(article.postedAt)}</span>
-            </div>
-            <p class="result-snippet">${snippet}</p>
-          </a>
-        </li>
-      `
-    })
+    .map(({ article, snippet, matchedIn }) =>
+      renderCard(article, snippet, matchedIn === 'title' ? '標題相符' : '內文相符'),
+    )
     .join('')
 }
 
@@ -98,8 +134,19 @@ async function main() {
     return
   }
 
-  renderResults(articles, '')
-  input.addEventListener('input', () => renderResults(articles, input.value))
+  let category: Category = 'all'
+  const rerender = () => renderResults(articles, input.value, category)
+
+  rerender()
+  input.addEventListener('input', rerender)
+  categoryInputs.forEach((radio, index) => {
+    radio.addEventListener('change', () => {
+      if (!radio.checked) return
+      category = radio.value as Category
+      categoryThumb.style.transform = `translateX(${index * 100}%)`
+      rerender()
+    })
+  })
 }
 
 main()

@@ -75,6 +75,61 @@ header .sub a {
   color: var(--accent);
 }
 
+.category-toggle {
+  position: relative;
+  display: flex;
+  border: 1px solid var(--border);
+  background: var(--card-bg);
+  border-radius: 999px;
+  padding: 4px;
+  margin-bottom: 14px;
+
+  .toggle-thumb {
+    position: absolute;
+    inset: 4px;
+    width: calc(25% - 4px);
+    background: var(--accent);
+    border-radius: 999px;
+    transition: transform 0.25s ease;
+  }
+
+  label {
+    position: relative;
+    flex: 1;
+    text-align: center;
+    padding: 8px 4px;
+    border-radius: 999px;
+    cursor: pointer;
+    font-size: 15px;
+    color: var(--text);
+    transition: color 0.25s ease;
+  }
+
+  input {
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    margin: 0;
+    cursor: pointer;
+  }
+
+  input:checked + span {
+    color: #fff;
+    font-weight: 600;
+  }
+
+  label:focus-within {
+    outline: 2px solid var(--accent-border);
+    outline-offset: 2px;
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  .category-toggle input:checked + span {
+    color: var(--text-h);
+  }
+}
+
 .search-box input {
   width: 100%;
   box-sizing: border-box;
