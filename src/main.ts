@@ -1,60 +1,79 @@
 import './style.css'
-import typescriptLogo from './assets/typescript.svg'
-import viteLogo from './assets/vite.svg'
-import heroImg from './assets/hero.png'
-import { setupCounter } from './counter.ts'
+import type { Article, ArticlesPayload } from './types.ts'
+import { escapeHtml, searchArticles } from './search.ts'
 
-document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
-<section id="center">
-  <div class="hero">
-    <img src="${heroImg}" class="base" width="170" height="179">
-    <img src="${typescriptLogo}" class="framework" alt="TypeScript logo"/>
-    <img src="${viteLogo}" class="vite" alt="Vite logo" />
-  </div>
-  <div>
-    <h1>Get started</h1>
-    <p>Edit <code>src/main.ts</code> and save to test <code>HMR</code></p>
-  </div>
-  <button id="counter" type="button" class="counter"></button>
-</section>
+const BOARD_URL = 'https://www.ptt.cc/bbs/HardwareSale/index.html'
+const DATA_URL = `${import.meta.env.BASE_URL}data/articles.json`
 
-<div class="ticks"></div>
+const app = document.querySelector<HTMLDivElement>('#app')!
+app.innerHTML = `
+<header>
+  <h1>PTT HardwareSale 全文搜尋</h1>
+  <p class="sub">
+    搜尋範圍涵蓋文章「內文」，不只是標題。
+    資料來源：<a href="${BOARD_URL}" target="_blank" rel="noreferrer">看板 HardwareSale</a>
+  </p>
+</header>
 
-<section id="next-steps">
-  <div id="docs">
-    <svg class="icon" role="presentation" aria-hidden="true"><use href="/icons.svg#documentation-icon"></use></svg>
-    <h2>Documentation</h2>
-    <p>Your questions, answered</p>
-    <ul>
-      <li>
-        <a href="https://vite.dev/" target="_blank">
-          <img class="logo" src="${viteLogo}" alt="" />
-          Explore Vite
-        </a>
-      </li>
-      <li>
-        <a href="https://www.typescriptlang.org" target="_blank">
-          <img class="button-icon" src="${typescriptLogo}" alt="">
-          Learn more
-        </a>
-      </li>
-    </ul>
-  </div>
-  <div id="social">
-    <svg class="icon" role="presentation" aria-hidden="true"><use href="/icons.svg#social-icon"></use></svg>
-    <h2>Connect with us</h2>
-    <p>Join the Vite community</p>
-    <ul>
-      <li><a href="https://github.com/vitejs/vite" target="_blank"><svg class="button-icon" role="presentation" aria-hidden="true"><use href="/icons.svg#github-icon"></use></svg>GitHub</a></li>
-      <li><a href="https://chat.vite.dev/" target="_blank"><svg class="button-icon" role="presentation" aria-hidden="true"><use href="/icons.svg#discord-icon"></use></svg>Discord</a></li>
-      <li><a href="https://x.com/vite_js" target="_blank"><svg class="button-icon" role="presentation" aria-hidden="true"><use href="/icons.svg#x-icon"></use></svg>X.com</a></li>
-      <li><a href="https://bsky.app/profile/vite.dev" target="_blank"><svg class="button-icon" role="presentation" aria-hidden="true"><use href="/icons.svg#bluesky-icon"></use></svg>Bluesky</a></li>
-    </ul>
-  </div>
-</section>
+<div class="search-box">
+  <input id="query" type="search" placeholder="輸入關鍵字，例如：RTX 4060 面交" autofocus />
+</div>
 
-<div class="ticks"></div>
-<section id="spacer"></section>
+<p id="status" class="status"></p>
+<ul id="results" class="results"></ul>
 `
 
-setupCounter(document.querySelector<HTMLButtonElement>('#counter')!)
+const input = document.querySelector<HTMLInputElement>('#query')!
+const statusEl = document.querySelector<HTMLParagraphElement>('#status')!
+const resultsEl = document.querySelector<HTMLUListElement>('#results')!
+
+function renderResults(articles: Article[], query: string) {
+  if (query.trim() === '') {
+    resultsEl.innerHTML = ''
+    statusEl.textContent = `目前共 ${articles.length} 篇文章，輸入關鍵字開始搜尋。`
+    return
+  }
+
+  const results = searchArticles(articles, query)
+  statusEl.textContent = `找到 ${results.length} 篇符合「${query}」的文章`
+
+  resultsEl.innerHTML = results
+    .map(({ article, snippet, matchedIn }) => {
+      const matchLabel = matchedIn === 'title' ? '標題相符' : '內文相符'
+      return `
+        <li class="result-card">
+          <a class="result-title" href="${article.url}" target="_blank" rel="noreferrer">
+            ${escapeHtml(article.title)}
+          </a>
+          <div class="result-meta">
+            <span class="badge">${matchLabel}</span>
+            <span>${escapeHtml(article.author)}</span>
+            <span>${escapeHtml(article.postedAt)}</span>
+          </div>
+          <p class="result-snippet">${snippet}</p>
+        </li>
+      `
+    })
+    .join('')
+}
+
+async function main() {
+  statusEl.textContent = '載入文章資料中…'
+  let payload: ArticlesPayload
+  try {
+    const res = await fetch(DATA_URL)
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    payload = await res.json()
+  } catch (err) {
+    statusEl.textContent = '文章資料載入失敗，請稍後再試。'
+    console.error(err)
+    return
+  }
+
+  const articles = [...payload.articles].reverse() // newest first
+  renderResults(articles, '')
+
+  input.addEventListener('input', () => renderResults(articles, input.value))
+}
+
+main()

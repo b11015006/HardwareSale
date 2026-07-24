@@ -1,0 +1,33 @@
+name: Scrape PTT HardwareSale
+
+on:
+  schedule:
+    - cron: "0 */3 * * *"
+  workflow_dispatch:
+    inputs:
+      count:
+        description: Number of latest articles to scrape
+        default: "10"
+
+permissions:
+  contents: write
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: node scripts/scrape.mjs "${{ inputs.count || '10' }}"
+      - name: Commit updated article data
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add public/data/articles.json
+          git diff --cached --quiet && echo "No changes to commit" && exit 0
+          git commit -m "Update scraped articles"
+          git push
