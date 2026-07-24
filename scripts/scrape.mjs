@@ -6,15 +6,30 @@ import { writeFile } from "node:fs/promises";
 const BOARD_URL = "https://www.ptt.cc/bbs/HardwareSale/index.html";
 const OUT_FILE = new URL("../public/data/articles.json", import.meta.url);
 const TARGET_COUNT = Number(process.argv[2] ?? 10);
-const HEADERS = { "User-Agent": "Mozilla/5.0", Cookie: "over18=1" };
+const HEADERS = {
+  "User-Agent":
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+  "Accept-Language": "zh-TW,zh;q=0.9,en;q=0.8",
+  Cookie: "over18=1",
+};
 const DELAY_MS = 300;
+const MAX_RETRIES = 4;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function fetchHtml(url) {
-  const res = await fetch(url, { headers: HEADERS });
-  if (!res.ok) throw new Error(`${res.status} fetching ${url}`);
-  return res.text();
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const res = await fetch(url, { headers: HEADERS });
+      if (!res.ok) throw new Error(`${res.status} fetching ${url}`);
+      return await res.text();
+    } catch (err) {
+      if (attempt === MAX_RETRIES) throw err;
+      const backoff = 500 * 2 ** (attempt - 1);
+      console.warn(`fetch failed (attempt ${attempt}/${MAX_RETRIES}) for ${url}: ${err.message}, retrying in ${backoff}ms`);
+      await sleep(backoff);
+    }
+  }
 }
 
 // A board index page lists articles oldest-to-newest top-to-bottom.
