@@ -58,7 +58,12 @@ function positionThumb(radio: HTMLInputElement) {
   const label = radio.closest('label')!
   const containerRect = categoryToggle.getBoundingClientRect()
   const labelRect = label.getBoundingClientRect()
-  categoryThumb.style.left = `${labelRect.left - containerRect.left}px`
+  // `left` on an absolutely positioned element resolves against its
+  // containing block's *padding* box, but getBoundingClientRect() returns
+  // the *border* box - off by categoryToggle's border-width if not
+  // corrected, which reads as the thumb sitting a pixel off-center.
+  const paddingBoxLeft = containerRect.left + categoryToggle.clientLeft
+  categoryThumb.style.left = `${labelRect.left - paddingBoxLeft}px`
   categoryThumb.style.width = `${labelRect.width}px`
 }
 
