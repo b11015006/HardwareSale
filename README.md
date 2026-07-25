@@ -15,12 +15,16 @@ Since this is a static GitHub Pages site, scraping happens offline via scheduled
 Articles are stored one file per post date, tracked via [Git LFS](https://git-lfs.com/):
 
 ```
-public/data/
+public/data/                 # deployed as-is; what the frontend fetches
   manifest.json              # { dates: [...], updatedAt }
   articles/
     2026-07-01.jsonl         # one JSON object per line, one file per date
     2026-07-02.jsonl
     ...
+
+data/state/                  # NOT deployed; scraper bookkeeping only
+  new.json                   # { nextPageUrl, updatedAt } - scrape-new's resume cursor
+  catchup.json               # { nextPageUrl, done, updatedAt } - scrape-catchup's resume cursor
 ```
 
 Each line is an `Article` (see `src/types.ts`):
@@ -43,6 +47,15 @@ Both are rate-limited to be polite to PTT: index/listing pages at 1 request/sec,
 `manifest.json` isn't committed as part of either scrape's own diff — it's regenerated fresh (`node scripts/scrape.mjs manifest`) after rebasing onto latest `main`, right before the final push, since it changes on nearly every run and would otherwise be a frequent merge-conflict source between the two workflows.
 
 After either workflow commits new data, `deploy.yml`'s `workflow_run` trigger rebuilds and redeploys the site (a `GITHUB_TOKEN`-authored commit doesn't cascade into other push-triggered workflows on its own, hence the explicit trigger).
+
+## Search UI
+
+`src/search.ts` does the actual matching, `src/main.ts` wires it to the DOM:
+
+- **Full-text search** (`searchArticles`) matches whitespace-separated query terms against title *and* body content (not just title), all terms required (AND), case-insensitive. Results carry a `matchedIn: 'title' | 'content'` badge and a snippet centered on the first matched term.
+- **Category slider toggle** (全部/賣/徵/估價, rendered from `CATEGORIES` in `search.ts`) filters by a category parsed from the title only (`articleCategory`), never from content — real titles are messy (full-width brackets `［...］`, stray leading punctuation like `：`), so the detection regex looks for a bracket immediately followed by the category word anywhere near the start rather than anchoring to the first character.
+- With a category selected but no query typed, results fall back to a plain chronological browse of that category (`buildPlainSnippet`) rather than showing nothing.
+- Everything runs against the full in-memory dataset after `loadArticles()` merges and sorts it — there's no incremental/streamed search, just one linear pass per keystroke.
 
 ## Local development
 

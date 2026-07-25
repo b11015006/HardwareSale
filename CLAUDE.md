@@ -28,6 +28,15 @@ All `*.jsonl` files are tracked via Git LFS (`.gitattributes`), declared as UTF-
 - Local dev needs `git lfs install` run once per clone before touching `*.jsonl` files.
 - If you ever see `git status` report `.jsonl` files as modified with no actual content change, it's almost always the LFS clean/diff filter reacting to a `.gitattributes` change, not real edits — check `git diff --stat` before assuming something broke.
 
+## Frontend: positioning the category toggle's sliding thumb
+
+The `.category-toggle` slider (`src/main.ts`, `positionThumb()`) had two separate, real bugs found by pixel-measuring actual screenshots rather than guessing:
+
+1. **Don't drive a sliding indicator with `transform: translateX(N * 100%)` across unequal-width items.** `100%` in a transform is relative to the *element's own* box, not the track. If the thumb's width isn't exactly the track divided evenly (ours was `calc(25% - 4px)`, short by the padding gap), each step undershoots and the error compounds — "correct" at index 0, visibly wrong by index 3. Fixed by measuring the checked label's real `getBoundingClientRect()` and setting the thumb's `left`/`width` in pixels directly, recomputed on every selection change and on window resize.
+2. **`left` on an absolutely positioned element resolves against its containing block's padding box, but `getBoundingClientRect()` returns the border box.** With a 1px border on `.category-toggle`, computing `left` as `labelRect.left - containerRect.left` was silently off by that 1px, every time, in the same direction — read as "the pill is slightly off-center" rather than a crash, so it's the kind of bug that survives casual visual review. Fixed by adding `categoryToggle.clientLeft` (the actual rendered border width) to the reference point.
+
+If you add another JS-positioned overlay element anywhere in this UI, both of these apply generally: prefer measuring real boxes over percentage math, and remember `getBoundingClientRect()` is border-box while absolute positioning is padding-box.
+
 ## `scrape-new` has a persisted cursor, same as catch-up
 
 `scrapeNew()` used to always restart from the board's newest page and give up (with nothing recorded) if it hit `MAX_PAGES_PER_ROUTINE_RUN` before finding an already-known article. If the backlog since the last successful run ever exceeded that page cap — a missed run, a GitHub Actions outage, several consecutive push-retry failures — that run would silently leave a gap with no way to detect or close it, since the next run always started over from page 1 with no memory of how far it had gotten.
