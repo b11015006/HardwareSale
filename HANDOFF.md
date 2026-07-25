@@ -16,6 +16,7 @@ Starting point: a bare `npm create vite` scaffold with no functionality.
    - `deploy.yml` pinned checkout to `workflow_run.head_sha`, which is the commit the triggering workflow *started* from, not what it pushed after finishing — the live site was serving stale pre-scrape data despite "successful" deploys.
    - The category toggle's sliding thumb had two independent CSS bugs (percentage-transform drift, border-box/padding-box mismatch), found by pixel-measuring actual screenshots rather than eyeballing.
 7. **Reliability hardening** — `ARTICLE_DELAY_MS` dropped from 60s to 10s (6x faster) once the above were fixed; push retry loop added after stress-testing revealed a narrower remaining race; `scrape-new` given its own persisted resume cursor (`data/state/new.json`) so it can no longer leave a silent permanent gap if a backlog ever exceeds one run's page budget.
+8. **`scrape-catchup` now disables its own schedule on completion** — previously, once `catchup.json` hit `done: true` the workflow would just keep running a cheap no-op every 30 minutes forever. It now calls `gh workflow disable` on itself in that case (see `CLAUDE.md`). Not yet observed running for real, since catch-up hasn't reached `CUTOFF_DATE` yet — see open items below.
 
 ## Current live status
 
@@ -28,6 +29,7 @@ Starting point: a bare `npm create vite` scaffold with no functionality.
 ## Open items / possible follow-ups (none urgent, none requested yet)
 
 - `MAX_PAGES_PER_ROUTINE_RUN` / `MAX_PAGES_PER_CATCHUP_RUN` are still `2`, sized for the old 60s/article delay. At the new 10s/article rate there's a lot of unused time budget per hourly run (a full run now takes minutes, not tens of minutes) — raising the cap would speed up the remaining catch-up backfill and give `scrape-new` more backlog-absorption headroom per run, but nobody's asked for it and the current pace is already reasonable.
+- **Watch for**: when `scrape-catchup` finally reaches `CUTOFF_DATE` and sets `done: true`, confirm its new self-disable step (item 8 above) actually fires and the workflow shows as disabled in the Actions tab afterward, rather than assuming it worked — it hasn't been exercised against a real completed run yet.
 - No monitoring/alerting on workflow failures beyond checking the Actions log manually. If that matters going forward, GitHub's built-in email-on-failure (repo settings → notifications) is the zero-effort option.
 - The frontend fetches every date's `.jsonl` file individually on load; fine at 7 files, would eventually want reconsidering if this runs for months and accumulates hundreds of date files.
 

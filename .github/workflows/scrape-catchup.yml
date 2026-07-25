@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 jobs:
   scrape:
@@ -50,3 +51,11 @@ jobs:
           done
           echo "::error::Failed to push after 5 attempts"
           exit 1
+      - name: Disable this schedule once catch-up is complete
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "$(jq -r '.done // false' data/state/catchup.json 2>/dev/null)" = "true" ]; then
+            echo "Catch-up reached cutoff; disabling future scheduled/manual runs of this workflow."
+            gh workflow disable "${{ github.workflow }}"
+          fi

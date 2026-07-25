@@ -45,6 +45,14 @@ It now saves a cursor to `data/state/new.json` (mirroring `catchup.json`) whenev
 
 This matters specifically because `scrape-catchup` is a *one-time* historical backfill — once it reaches `CUTOFF_DATE` it sets `done: true` and stops running its backward-walking logic for good. Before this fix, catch-up incidentally acted as a safety net that would eventually re-discover anything `scrape-new` missed as it walked past that time period; after catch-up finishes, there's nothing left to catch a gap except `scrape-new` itself, so `scrape-new` needs to be able to close an arbitrarily large backlog on its own.
 
+## `scrape-catchup` disables its own schedule once done
+
+Once `scrapeCatchup()` reaches `CUTOFF_DATE` and writes `done: true` to `data/state/catchup.json`, `scrape-catchup.yml`'s last step (`Disable this schedule once catch-up is complete`) calls `gh workflow disable "${{ github.workflow }}"`, turning off both the cron trigger and manual `workflow_dispatch` for that workflow. Before this, a completed catch-up would just run a cheap no-op every 30 minutes forever instead of actually stopping.
+
+- This step deliberately has no `if:` override, so it only runs if the commit/push step above it succeeded — it checks the *local* checkout's `catchup.json`, and if a push failed after all retries, that local `done: true` never made it to `origin/main`. Disabling the workflow in that scenario would strand catch-up permanently incomplete with no run left to retry it. Don't add `if: always()` here without also switching the check to the pushed/remote state.
+- Needs `permissions: actions: write` on the workflow (in addition to the existing `contents: write`) — that's what lets `GITHUB_TOKEN` call the workflow-disable API.
+- Disabling is done via the Actions API (`gh workflow disable`), not by editing/committing the YAML file itself — no extra permission scope, no commit to review, and it's reversible with `gh workflow enable` if catch-up ever needs to run again (e.g., `CUTOFF_DATE` gets moved further back).
+
 ## Two scrape workflows, one deploy trigger
 
 `scrape-new.yml` (hourly `:00`) and `scrape-catchup.yml` (hourly `:30`, offset intentionally to avoid both pushing to `main` at the same moment) both commit with the default `GITHUB_TOKEN`. GitHub does not let `GITHUB_TOKEN`-authored pushes cascade into other push-triggered workflows — this is why `deploy.yml` has an explicit `workflow_run` trigger listening for both scrape workflow names, in addition to its `push` trigger. If you rename either scrape workflow's `name:`, update `deploy.yml`'s `workflow_run.workflows` list to match, or redeploys silently stop happening after a scrape.
