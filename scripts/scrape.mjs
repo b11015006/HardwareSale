@@ -10,7 +10,10 @@
 //             reached. Also meant to run hourly, picking up where the
 //             previous run left off.
 //
-// Article-content fetches are throttled to 1/min; see ARTICLE_DELAY_MS.
+// Article-content fetches are throttled; see ARTICLE_DELAY_MS. A third
+// "manifest" mode just regenerates manifest.json from whatever *.jsonl
+// files currently exist on disk, without fetching anything - see the note
+// on writeManifest() for why it's kept out of the scrape modes themselves.
 import * as cheerio from "cheerio";
 import { mkdir, readdir, readFile, writeFile, appendFile } from "node:fs/promises";
 
@@ -29,13 +32,13 @@ const HEADERS = {
   Cookie: "over18=1",
 };
 // Be polite to PTT: board index (listing) pages are cheap, so those stay at
-// 1/sec, but individual article-content fetches are throttled to 1/min.
+// 1/sec, but individual article-content fetches are throttled.
 const INDEX_DELAY_MS = 1000;
-const ARTICLE_DELAY_MS = 60_000;
+const ARTICLE_DELAY_MS = 10_000;
 const MAX_RETRIES = 4;
 // Kept small because each page can add up to ~20 articles to the queue,
-// and at 1 article/min that queue is the run's time budget — this keeps a
-// single hourly run comfortably under an hour even in the worst case.
+// and that queue is the run's time budget at ARTICLE_DELAY_MS/article —
+// this keeps a single hourly run comfortably under an hour even worst case.
 const MAX_PAGES_PER_ROUTINE_RUN = 2;
 const MAX_PAGES_PER_CATCHUP_RUN = 2;
 
@@ -178,6 +181,17 @@ async function appendArticles(articles) {
   }
 }
 
+// Deliberately NOT called from scrapeNew()/scrapeCatchup(). manifest.json
+// changes on effectively every run of either workflow (even a run that
+// finds zero new articles still bumps updatedAt), and catch-up runs take
+// 30-40+ minutes - long enough to almost always straddle the other
+// workflow's run. Committing manifest.json as part of the scrape's own
+// diff meant `git rebase origin/main` regularly hit a real conflict on it,
+// which is unresolvable automatically and silently discarded that run's
+// entire scrape (git rebase failure -> job failure -> nothing pushed).
+// Instead each workflow regenerates it fresh, as a "manifest" mode run,
+// *after* rebasing onto latest origin/main and immediately before pushing
+// - see .github/workflows/scrape-*.yml.
 async function writeManifest() {
   const files = (await readdir(ARTICLES_DIR).catch(() => []))
     .filter((f) => f.endsWith(".jsonl"))
@@ -248,7 +262,6 @@ async function scrapeNew() {
   const articles = await fetchArticles(collected);
   const fresh = articles.filter((a) => !existingIds.has(a.id));
   await appendArticles(fresh);
-  await writeManifest();
   console.log(`Stored ${fresh.length} new article(s).`);
 }
 
@@ -300,7 +313,6 @@ async function scrapeCatchup() {
 
   const fresh = inRange.filter((a) => !existingIds.has(a.id));
   await appendArticles(fresh);
-  await writeManifest();
   await saveCatchupState({ nextPageUrl: reachedCutoff ? null : pageUrl, done: reachedCutoff });
 
   console.log(
@@ -316,8 +328,9 @@ async function main() {
   const mode = process.argv[2] ?? "new";
   if (mode === "new") await scrapeNew();
   else if (mode === "catchup") await scrapeCatchup();
+  else if (mode === "manifest") await writeManifest();
   else {
-    console.error(`Unknown mode "${mode}". Use "new" or "catchup".`);
+    console.error(`Unknown mode "${mode}". Use "new", "catchup", or "manifest".`);
     process.exit(1);
   }
 }

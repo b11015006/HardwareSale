@@ -25,9 +25,16 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add public/data
+          git add public/data/articles
           git diff --cached --quiet && echo "No changes to commit" && exit 0
           git commit -m "Scrape: new articles"
           git fetch origin main
           git rebase origin/main
+          # manifest.json is regenerated fresh post-rebase rather than
+          # committed as part of the diff above, since it changes on
+          # nearly every run and would otherwise be a frequent rebase
+          # conflict source against the other scrape workflow.
+          node scripts/scrape.mjs manifest
+          git add public/data/manifest.json
+          git commit --amend --no-edit
           git push

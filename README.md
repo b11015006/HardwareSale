@@ -38,7 +38,9 @@ Each line is an `Article` (see `src/types.ts`):
 - **`new`** (`.github/workflows/scrape-new.yml`, `:00` hourly) — walks backward from the board's newest page only until it finds an article already stored. Self-healing: if a run is missed, it just walks back further next time.
 - **`catchup`** (`.github/workflows/scrape-catchup.yml`, `:30` hourly) — backfills history. Resumes from a cursor saved in `data/state/catchup.json` and pages further backward each run until it reaches articles older than `CUTOFF_DATE` (currently `2026-07-01`, set in `scripts/scrape.mjs`). Expected to take many runs (hours) to fully catch up.
 
-Both are rate-limited to be polite to PTT: index/listing pages at 1 request/sec, individual article-content pages at **1 request/min**. Because of that, each run's page cap is kept small (2 pages) so a run can't run past the hourly schedule.
+Both are rate-limited to be polite to PTT: index/listing pages at 1 request/sec, individual article-content pages at 1 request per `ARTICLE_DELAY_MS` (currently 10s). Because of that, each run's page cap is kept small (2 pages) so a run can't run past the hourly schedule.
+
+`manifest.json` isn't committed as part of either scrape's own diff — it's regenerated fresh (`node scripts/scrape.mjs manifest`) after rebasing onto latest `main`, right before the final push, since it changes on nearly every run and would otherwise be a frequent merge-conflict source between the two workflows.
 
 After either workflow commits new data, `deploy.yml`'s `workflow_run` trigger rebuilds and redeploys the site (a `GITHUB_TOKEN`-authored commit doesn't cascade into other push-triggered workflows on its own, hence the explicit trigger).
 
