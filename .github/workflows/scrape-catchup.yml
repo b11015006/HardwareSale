@@ -28,13 +28,25 @@ jobs:
           git add public/data/articles data/state
           git diff --cached --quiet && echo "No changes to commit" && exit 0
           git commit -m "Scrape: catch-up history"
-          git fetch origin main
-          git rebase origin/main
+
           # manifest.json is regenerated fresh post-rebase rather than
           # committed as part of the diff above, since it changes on
           # nearly every run and would otherwise be a frequent rebase
-          # conflict source against the other scrape workflow.
-          node scripts/scrape.mjs manifest
-          git add public/data/manifest.json
-          git commit --amend --no-edit
-          git push
+          # conflict source against the other scrape workflow. The push
+          # itself is still retried: a genuinely concurrent push (from the
+          # other scrape workflow, or an overlapping manual dispatch) can
+          # still land in the few-second gap between rebase and push.
+          for attempt in 1 2 3 4 5; do
+            git fetch origin main
+            git rebase origin/main
+            node scripts/scrape.mjs manifest
+            git add public/data/manifest.json
+            git commit --amend --no-edit
+            if git push; then
+              exit 0
+            fi
+            echo "Push rejected (attempt $attempt/5), retrying..."
+            sleep $((RANDOM % 8 + 3))
+          done
+          echo "::error::Failed to push after 5 attempts"
+          exit 1
