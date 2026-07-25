@@ -4,7 +4,13 @@
 //
 // Two modes (first CLI arg):
 //   new     - incremental: walk backward from the newest page until an
-//             already-stored article id is found. Meant to run hourly.
+//             already-stored article id is found. Meant to run hourly. If a
+//             run's page cap is hit before finding that boundary (a bigger
+//             backlog than one run can absorb - a missed run, an outage),
+//             it resumes from a saved cursor next run instead of
+//             restarting from the newest page every time, so a backlog
+//             larger than one run's budget still gets fully closed over
+//             a few runs rather than leaving a permanent gap.
 //   catchup - backfill: resume from a saved cursor and walk further
 //             backward in time until articles older than CUTOFF_DATE are
 //             reached. Also meant to run hourly, picking up where the
@@ -20,7 +26,8 @@ import { mkdir, readdir, readFile, writeFile, appendFile } from "node:fs/promise
 const BOARD_URL = "https://www.ptt.cc/bbs/HardwareSale/index.html";
 const ARTICLES_DIR = new URL("../public/data/articles/", import.meta.url);
 const MANIFEST_FILE = new URL("../public/data/manifest.json", import.meta.url);
-const STATE_FILE = new URL("../data/state/catchup.json", import.meta.url);
+const NEW_STATE_FILE = new URL("../data/state/new.json", import.meta.url);
+const CATCHUP_STATE_FILE = new URL("../data/state/catchup.json", import.meta.url);
 
 // Catch-up traces backward through history down to and including this date.
 const CUTOFF_DATE = "2026-07-01";
@@ -203,19 +210,19 @@ async function writeManifest() {
   );
 }
 
-async function loadCatchupState() {
+async function loadState(file, defaults) {
   try {
-    const text = await readFile(STATE_FILE, "utf8");
-    return JSON.parse(text);
+    const text = await readFile(file, "utf8");
+    return { ...defaults, ...JSON.parse(text) };
   } catch {
-    return { nextPageUrl: null, done: false };
+    return defaults;
   }
 }
 
-async function saveCatchupState(state) {
-  await mkdir(new URL(".", STATE_FILE), { recursive: true });
+async function saveState(file, state) {
+  await mkdir(new URL(".", file), { recursive: true });
   await writeFile(
-    STATE_FILE,
+    file,
     JSON.stringify({ ...state, updatedAt: new Date().toISOString() }, null, 2),
   );
 }
@@ -230,15 +237,20 @@ async function fetchArticles(entries) {
 }
 
 // Routine job: find articles newer than anything already stored. Walks
-// backward from the newest page only as far as needed to reach an
-// already-known article, so it naturally catches up on any backlog if a
-// run was missed.
+// backward until it finds an already-known article - fully caught up - or
+// hits this run's page cap. In the latter case it saves a cursor and
+// resumes from there next run rather than restarting from the newest page,
+// so a backlog bigger than one run's budget still gets fully closed over
+// a few runs instead of leaving a permanent gap (see the mode comment atop
+// this file).
 async function scrapeNew() {
   console.log("Routine scrape: looking for new articles...");
   const existingIds = await loadExistingIds();
+  const state = await loadState(NEW_STATE_FILE, { nextPageUrl: null });
 
-  let pageUrl = BOARD_URL;
+  let pageUrl = state.nextPageUrl ?? BOARD_URL;
   let pagesFetched = 0;
+  let caughtUp = false;
   const collected = [];
 
   while (pageUrl && pagesFetched < MAX_PAGES_PER_ROUTINE_RUN) {
@@ -254,7 +266,11 @@ async function scrapeNew() {
       }
       collected.push(entry);
     }
-    if (hitKnown || !prevUrl) break;
+    if (hitKnown || !prevUrl) {
+      caughtUp = true;
+      pageUrl = null;
+      break;
+    }
     pageUrl = prevUrl;
   }
 
@@ -262,14 +278,20 @@ async function scrapeNew() {
   const articles = await fetchArticles(collected);
   const fresh = articles.filter((a) => !existingIds.has(a.id));
   await appendArticles(fresh);
-  console.log(`Stored ${fresh.length} new article(s).`);
+  await saveState(NEW_STATE_FILE, { nextPageUrl: caughtUp ? null : pageUrl });
+
+  console.log(
+    `Stored ${fresh.length} new article(s). ${
+      caughtUp ? "Caught up with the newest page." : `Backlog remains; will resume from ${pageUrl} next run.`
+    }`,
+  );
 }
 
 // Catch-up job: resume from a saved cursor and keep paging backward in
 // time, storing anything not already saved, until articles older than
 // CUTOFF_DATE are reached (or the board's oldest page is reached first).
 async function scrapeCatchup() {
-  const state = await loadCatchupState();
+  const state = await loadState(CATCHUP_STATE_FILE, { nextPageUrl: null, done: false });
   if (state.done) {
     console.log(`Catch-up already complete (reached ${CUTOFF_DATE}).`);
     return;
@@ -313,7 +335,7 @@ async function scrapeCatchup() {
 
   const fresh = inRange.filter((a) => !existingIds.has(a.id));
   await appendArticles(fresh);
-  await saveCatchupState({ nextPageUrl: reachedCutoff ? null : pageUrl, done: reachedCutoff });
+  await saveState(CATCHUP_STATE_FILE, { nextPageUrl: reachedCutoff ? null : pageUrl, done: reachedCutoff });
 
   console.log(
     `Stored ${fresh.length} article(s). ${

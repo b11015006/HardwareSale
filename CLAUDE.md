@@ -28,6 +28,14 @@ All `*.jsonl` files are tracked via Git LFS (`.gitattributes`), declared as UTF-
 - Local dev needs `git lfs install` run once per clone before touching `*.jsonl` files.
 - If you ever see `git status` report `.jsonl` files as modified with no actual content change, it's almost always the LFS clean/diff filter reacting to a `.gitattributes` change, not real edits — check `git diff --stat` before assuming something broke.
 
+## `scrape-new` has a persisted cursor, same as catch-up
+
+`scrapeNew()` used to always restart from the board's newest page and give up (with nothing recorded) if it hit `MAX_PAGES_PER_ROUTINE_RUN` before finding an already-known article. If the backlog since the last successful run ever exceeded that page cap — a missed run, a GitHub Actions outage, several consecutive push-retry failures — that run would silently leave a gap with no way to detect or close it, since the next run always started over from page 1 with no memory of how far it had gotten.
+
+It now saves a cursor to `data/state/new.json` (mirroring `catchup.json`) whenever it hits the page cap without reaching a known article, and resumes from there next run instead of restarting from the top. This guarantees any backlog eventually gets fully closed over however many runs it takes, the same way catch-up already worked, rather than leaving a permanent hole. Verified locally by temporarily shrinking `MAX_PAGES_PER_ROUTINE_RUN` to 1 against a deliberately-stale local dataset: run 1 hit the cap and saved a cursor, run 2 resumed from that exact page (not the newest one) and correctly cleared the cursor on reaching the known boundary.
+
+This matters specifically because `scrape-catchup` is a *one-time* historical backfill — once it reaches `CUTOFF_DATE` it sets `done: true` and stops running its backward-walking logic for good. Before this fix, catch-up incidentally acted as a safety net that would eventually re-discover anything `scrape-new` missed as it walked past that time period; after catch-up finishes, there's nothing left to catch a gap except `scrape-new` itself, so `scrape-new` needs to be able to close an arbitrarily large backlog on its own.
+
 ## Two scrape workflows, one deploy trigger
 
 `scrape-new.yml` (hourly `:00`) and `scrape-catchup.yml` (hourly `:30`, offset intentionally to avoid both pushing to `main` at the same moment) both commit with the default `GITHUB_TOKEN`. GitHub does not let `GITHUB_TOKEN`-authored pushes cascade into other push-triggered workflows — this is why `deploy.yml` has an explicit `workflow_run` trigger listening for both scrape workflow names, in addition to its `push` trigger. If you rename either scrape workflow's `name:`, update `deploy.yml`'s `workflow_run.workflows` list to match, or redeploys silently stop happening after a scrape.

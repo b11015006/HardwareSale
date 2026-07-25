@@ -35,7 +35,7 @@ Each line is an `Article` (see `src/types.ts`):
 
 `scripts/scrape.mjs` has two modes, run by two separate hourly workflows:
 
-- **`new`** (`.github/workflows/scrape-new.yml`, `:00` hourly) — walks backward from the board's newest page only until it finds an article already stored. Self-healing: if a run is missed, it just walks back further next time.
+- **`new`** (`.github/workflows/scrape-new.yml`, `:00` hourly) — walks backward from the board's newest page until it finds an article already stored. If a backlog is bigger than one run's page budget (a missed run, an outage), it saves a cursor in `data/state/new.json` and resumes from there next run instead of restarting from the top, so it always eventually fully catches up rather than leaving a gap.
 - **`catchup`** (`.github/workflows/scrape-catchup.yml`, `:30` hourly) — backfills history. Resumes from a cursor saved in `data/state/catchup.json` and pages further backward each run until it reaches articles older than `CUTOFF_DATE` (currently `2026-07-01`, set in `scripts/scrape.mjs`). Expected to take many runs (hours) to fully catch up.
 
 Both are rate-limited to be polite to PTT: index/listing pages at 1 request/sec, individual article-content pages at 1 request per `ARTICLE_DELAY_MS` (currently 10s). Because of that, each run's page cap is kept small (2 pages) so a run can't run past the hourly schedule.
