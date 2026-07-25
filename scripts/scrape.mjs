@@ -64,11 +64,17 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function fetchHtml(url, delayMs) {
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    // Start the courtesy delay alongside the request rather than after it,
+    // so the wait overlaps with PTT's response time instead of stacking on
+    // top of it. Still exactly one request in flight at a time - this only
+    // absorbs network/parse latency into the delay, it doesn't shorten the
+    // delay itself or start a second request early.
+    const delay = sleep(delayMs);
     try {
       const res = await fetch(url, { headers: HEADERS });
       if (!res.ok) throw new Error(`${res.status} fetching ${url}`);
       const html = await res.text();
-      await sleep(delayMs);
+      await delay;
       return html;
     } catch (err) {
       if (attempt === MAX_RETRIES) throw err;
