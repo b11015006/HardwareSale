@@ -47,7 +47,13 @@ const MAX_RETRIES = 4;
 // and that queue is the run's time budget at ARTICLE_DELAY_MS/article —
 // this keeps a single hourly run comfortably under an hour even worst case.
 const MAX_PAGES_PER_ROUTINE_RUN = 2;
-const MAX_PAGES_PER_CATCHUP_RUN = 2;
+// Raised from 2 to 8: worst case is 8 pages * ~20 articles/page *
+// ARTICLE_DELAY_MS (10s) ≈ 27 minutes, still comfortably inside the hourly
+// cron slot (and well clear of the :00 scrape-new run), while closing the
+// catch-up backlog roughly 4x faster per run. Per-article delay is
+// unchanged - this doesn't make requests to PTT any less polite, it just
+// does more of the same-paced requests before a run ends.
+const MAX_PAGES_PER_CATCHUP_RUN = 8;
 
 const MONTHS = {
   Jan: "01", Feb: "02", Mar: "03", Apr: "04", May: "05", Jun: "06",
