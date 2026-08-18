@@ -266,7 +266,24 @@ async function scrapeNew() {
   const collected = [];
 
   while (pageUrl && pagesFetched < MAX_PAGES_PER_ROUTINE_RUN) {
-    const html = await fetchHtml(pageUrl, INDEX_DELAY_MS);
+    let html;
+    try {
+      html = await fetchHtml(pageUrl, INDEX_DELAY_MS);
+    } catch (err) {
+      // A saved cursor can go stale between runs (e.g. enough deletions
+      // upstream of it shrink the board's total page count below the
+      // cursor's page number), which otherwise fails every run forever
+      // since the same dead cursor just gets reloaded and retried next
+      // time. Recover by dropping the cursor and restarting from the
+      // newest page instead - existingIds dedupe means this is safe and
+      // no worse than a normal restart-from-top run.
+      if (err.message.startsWith("404") && pageUrl !== BOARD_URL) {
+        console.warn(`Saved cursor ${pageUrl} is no longer valid (${err.message}); restarting from the newest page.`);
+        pageUrl = BOARD_URL;
+        continue;
+      }
+      throw err;
+    }
     pagesFetched++;
     const { entries, prevUrl } = parseIndex(html, pageUrl);
 
